@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Raw and intermediate data (not distributable / too large for git;
+# see data/README.md for how to regenerate).
+data/raw/
+*.combined_data.csv
+
+# Regeneratable pipeline outputs -- CSVs produced by 01_clean_data.py
+# and CmdStan output produced by 02_fit_models.py. These are large,
+# change every run, and can be rebuilt from raw data + the scripts.
+results/train_test/
+results/mcmc/
+
+# Everything else under results/ (figures, tables, forecast CSVs,
+# model comparison summaries) is small, final, and worth keeping in
+# git -- see the README for what's tracked there.
+
+# CmdStan compiled model artifacts
+*.o
+*.hpp
+src/pmhp/models/*.exe
+src/pmhp/models/hawkes_temporal_seasonal_beta_gamma
