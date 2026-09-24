@@ -2,44 +2,27 @@
 """
 EDA, monthly counts, and posterior-parameter figures for the paper.
 
-Ported from the first ~300 lines of the old `new_reader.py` (itself a
-few notebook cells concatenated together: reading the cleaned event
-data, monthly-count validation/export, and the full-city branching
-matrix heatmap). The self-excitation / background district maps and
-event-count map further down that file are ported separately below
-(see `make_self_excitation_maps` etc., added in the next step).
-
-Usage
------
-    python scripts/04_make_figures.py \
-        --data-root results/train_test \
-        --results-root results/mcmc/constant \
-        --output-dir results/figures
+Author: Persia Luca (2026), Università della Svizzera italiana, Lugano, Switzerland
+Notes: additional revision used Codex (model GPT-5.6 Sol) to improve code clarity and maintainability.
 """
 
 from __future__ import annotations
-
 import argparse
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import geopandas as gpd
-import matplotlib.colors as mcolors
+import numpy as np, pandas as pd
+import matplotlib.pyplot as plt, geopandas as gpd, matplotlib.colors as mcolors, matplotlib.ticker as mticker
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.cm import ScalarMappable
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
-import matplotlib.ticker as mticker
 import cartopy.crs as ccrs
 import cartopy.io.img_tiles as cimgt
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 
-from pmhp.forecast import branching_prefix as _branching_prefix
+from pmhp.posterior import branching_prefix as _branching_prefix
 
-# Map styling -- shared by the self-excitation and background maps below.
-PLOT_MODE = "panel"  # "panel" (2x2) or "separate" (one figure per category)
+# map styling -- shared by the self-excitation and background maps below
+PLOT_MODE = "panel"  # figure panel (2x2)
 SHOW_DISTRICT_CODES = True
 TILE_ZOOM = 11
 CONTEXT_MARGIN = 0.10
@@ -57,11 +40,11 @@ PANEL_WSPACE = 0.03
 CATEGORY_TITLE_SIZE = 24
 CATEGORY_TITLE_Y = 1.015
 
-# Event-count raster map (fine-grained incident density, not district
-# deviation) -- separate styling from the deviation maps above.
+# event-count raster map
 EVENT_COUNT_CATEGORIES = {1: "Vehicle theft", 2: "Vandalism", 3: "Burglary", 4: "Violent"}
 EVENT_COUNT_CELL_METRES = 150
 EVENT_COUNT_CRS_METRIC = "EPSG:26986"
+# color bins: 1, 2-3, 4-7, 8-15, 16-31, 32+ for the map of actual counts
 EVENT_COUNT_GRID_COLORS = [
     "#F7D9A1",  # 1
     "#F1B66F",  # 2--3
@@ -72,33 +55,22 @@ EVENT_COUNT_GRID_COLORS = [
 ]
 EVENT_COUNT_BACKGROUND_COLOR = "#F7F3EF"
 
+# labeling and ordering of categories
 CATEGORY_LABELS = {1: "Vehicle theft", 2: "Vandalism and disorder", 3: "Burglary", 4: "Violent crime"}
 CATEGORY_ORDER = list(CATEGORY_LABELS.values())
-
-CATEGORY_NAMES = {
-    1: "vehicle_theft",
-    2: "vandalism_disorder",
-    3: "burglary",
-    4: "violent_crime",
-}
-
+CATEGORY_NAMES = {1: "vehicle_theft", 2: "vandalism_disorder", 3: "burglary", 4: "violent_crime"}
 START_DATE = pd.Timestamp("2020-01-01")
 END_DATE = pd.Timestamp("2026-03-31 23:59:59")
 
-# Sanity-check totals from the reported 55,627-event final sample.
-# Update these (or drop the check) if the underlying data changes.
+# Sanity-check totals from the reported 55,627-event final sample
 EXPECTED_CATEGORY_COUNTS = {1: 19267, 2: 16736, 3: 5936, 4: 13688}
 
-
 def read_event_data(data_root: Path) -> dict[str, pd.DataFrame]:
-    """Read every unit's cleaned '*_all_*' event CSV under data_root
-    (full_city first, then districts alphabetically).
+    """Read every unit's cleaned '*_all_*' event CSV under data_root.
     """
+
     event_data: dict[str, pd.DataFrame] = {}
-    unit_dirs = sorted(
-        (p for p in data_root.iterdir() if p.is_dir()),
-        key=lambda p: (p.name != "full_city", p.name),
-    )
+    unit_dirs = sorted((p for p in data_root.iterdir() if p.is_dir()), key=lambda p: (p.name != "full_city", p.name))
 
     for unit_dir in unit_dirs:
         files = [
@@ -108,7 +80,7 @@ def read_event_data(data_root: Path) -> dict[str, pd.DataFrame]:
         ]
         if not files:
             continue
-
+        # read the first matching CSV (should be only one) and validate its columns
         df = pd.read_csv(sorted(files)[0], parse_dates=["OCCURRED_ON_DATE"], low_memory=False)
         required = {"OCCURRED_ON_DATE", "hawkes_category", "hawkes_id", "DISTRICT"}
         missing = required.difference(df.columns)
@@ -116,7 +88,7 @@ def read_event_data(data_root: Path) -> dict[str, pd.DataFrame]:
             raise ValueError(f"{unit_dir.name}: missing columns {sorted(missing)}")
         if df["OCCURRED_ON_DATE"].isna().any() or df["hawkes_id"].isna().any():
             raise ValueError(f"{unit_dir.name}: missing dates or Hawkes categories")
-
+        # sort, reset index, and add derived columns
         df = df.sort_values("OCCURRED_ON_DATE").reset_index(drop=True)
         df["hawkes_id"] = df["hawkes_id"].astype(int)
         df["category"] = df["hawkes_id"].map(CATEGORY_LABELS)
@@ -130,8 +102,7 @@ def read_event_data(data_root: Path) -> dict[str, pd.DataFrame]:
 
 
 def build_monthly_counts(full_city: pd.DataFrame) -> pd.DataFrame:
-    """Monthly event counts by category for full_city, validated against
-    EXPECTED_CATEGORY_COUNTS, with a 3-month centered moving average.
+    """Monthly event counts by category for full_city, validates. For the seasonal plot.
     """
     monthly_source = full_city[["OCCURRED_ON_DATE", "hawkes_id"]].copy()
     monthly_source["date"] = pd.to_datetime(monthly_source["OCCURRED_ON_DATE"], errors="coerce")
@@ -192,14 +163,10 @@ def build_monthly_counts(full_city: pd.DataFrame) -> pd.DataFrame:
 
 
 def read_posterior_draws(results_root: Path) -> dict[str, pd.DataFrame]:
-    """Read every unit's chain CSVs under results_root into one
-    concatenated draws DataFrame per unit, tagged with chain id.
+    """Read every unit's chain CSVs under results_root into one DataFrame per unit.
     """
     posterior_draws: dict[str, pd.DataFrame] = {}
-    unit_dirs = sorted(
-        (p for p in results_root.iterdir() if p.is_dir()),
-        key=lambda p: (p.name != "full_city", p.name),
-    )
+    unit_dirs = sorted( (p for p in results_root.iterdir() if p.is_dir()), key=lambda p: (p.name != "full_city", p.name) )
 
     for unit_dir in unit_dirs:
         chain_files = sorted(
@@ -243,6 +210,7 @@ def plot_branching_matrix(full_draws: pd.DataFrame, output_path: Path) -> None:
     ax.set_xticks(range(4), CATEGORY_ORDER, rotation=35, ha="right")
     ax.set_yticks(range(4), CATEGORY_ORDER)
     ax.set_xlabel("Parent category")
+    # triggered
     ax.set_ylabel("Child category")
 
     for i in range(4):
@@ -256,10 +224,8 @@ def plot_branching_matrix(full_draws: pd.DataFrame, output_path: Path) -> None:
     plt.close(fig)
     print(f"Saved: {output_path}")
 
-
 def branching_prefix(full_draws: pd.DataFrame) -> str:
     return _branching_prefix(full_draws.columns)
-
 
 def load_district_geometries(
     geojson_path: Path,
@@ -291,19 +257,15 @@ def district_deviation_percentages(
     category_labels: dict[int, str],
     parameter_of,
 ) -> pd.DataFrame:
-    """Percentage deviation of each district's posterior mean from the
-    full-city posterior mean, for whichever parameter `parameter_of`
-    (a function of category_id -> column name) points at. Used for both
-    the self-excitation map (branching_ratio/alpha.i.i) and the
-    background-intensity map (mu.i) -- the two were previously
-    ~300-line copy-pasted blocks differing only in this parameter.
+    """Percentage deviation of each district's posterior mean from the full-city posterior mean. 
+    Used for both the self-excitation map (branching_ratio/alpha.i.i) and the background-intensity map (mu.i)
     """
     rows = []
     for category_id, category_name in category_labels.items():
         parameter = parameter_of(category_id)
         city_mean = full_draws[parameter].mean()
         if abs(city_mean) < 1e-12:
-            raise ValueError(f"The full-city estimate for {category_name} is too close to zero.")
+            raise ValueError(f"full-city estimate for {category_name} is too close to zero.")
 
         for unit, draws in posterior_draws.items():
             if not unit.startswith("district_") or parameter not in draws.columns:
@@ -331,9 +293,8 @@ def plot_district_deviation_map(
     colorbar_label: str,
     output_path: Path,
 ) -> None:
-    """2x2 (or 4 separate) basemap panels shading each district by its
-    percentage deviation from the full-city posterior mean, one panel
-    per category. Shared by the self-excitation and background maps.
+    """2x2 (or 4 separate) basemap panels shading each district by its 
+    percentage deviation from the full-city posterior mean, one panel per category.
     """
     maximum_absolute_change = percentages["percentage_change"].abs().max()
     color_limit = max(10, np.ceil(maximum_absolute_change / 10) * 10)
@@ -354,9 +315,7 @@ def plot_district_deviation_map(
             2, 2, figsize=PANEL_FIGSIZE, dpi=150,
             subplot_kw={"projection": background.crs}, constrained_layout=True,
         )
-        fig.set_constrained_layout_pads(
-            h_pad=PANEL_H_PAD, w_pad=PANEL_W_PAD, hspace=PANEL_HSPACE, wspace=PANEL_WSPACE
-        )
+        fig.set_constrained_layout_pads(h_pad=PANEL_H_PAD, w_pad=PANEL_W_PAD, hspace=PANEL_HSPACE, wspace=PANEL_WSPACE)
         axes = axes.ravel()
     else:
         fig, axes = None, [None] * 4
@@ -369,9 +328,7 @@ def plot_district_deviation_map(
         if PLOT_MODE == "panel":
             ax = axes[plot_index]
         else:
-            fig, ax = plt.subplots(
-                figsize=SEPARATE_FIGSIZE, dpi=150, subplot_kw={"projection": background.crs}
-            )
+            fig, ax = plt.subplots(figsize=SEPARATE_FIGSIZE, dpi=150, subplot_kw={"projection": background.crs})
 
         ax.set_extent(map_extent, crs=data_crs)
         ax.add_image(background, TILE_ZOOM, zorder=0)
@@ -418,7 +375,7 @@ def plot_district_deviation_map(
             [city_outline], crs=data_crs, facecolor="none",
             edgecolor=CITY_LINE_COLOR, linewidth=CITY_LINE_WIDTH, zorder=3,
         )
-
+        # adding panels names by category
         panel_letter = chr(ord("a") + plot_index)
         ax.text(
             0.5, CATEGORY_TITLE_Y, f"({panel_letter}) {category_name}",
@@ -451,10 +408,7 @@ def plot_seasonal_multiplier(
     full_draws: pd.DataFrame, full_city: pd.DataFrame, output_dir: Path
 ) -> pd.DataFrame:
     """Estimated monthly seasonal multiplier (with 95% credible band)
-    against the observed monthly profile for each complete calendar
-    year in the data. Also returns/saves the monthly posterior summary
-    table so 05_make_tables.py can build the LaTeX table from it
-    without re-deriving the seasonal draws.
+    against the observed monthly profile for each complete calendar year in the data.
     """
     season_cols = sorted(
         (c for c in full_draws.columns if c.startswith("season_factor_grid.")),
@@ -558,10 +512,7 @@ def plot_event_count_map(
     geo_district_col: str,
     output_path: Path,
 ) -> None:
-    """2x2 raster map of recorded-incident density per 150m grid cell,
-    one panel per category. Distinct from `plot_district_deviation_map`
-    above: this shows raw spatial density, not a district-level
-    deviation from the city-wide posterior mean.
+    """2x2 raster map of recorded-incident density per 150m grid cell, one panel per category.
     """
     districts = gpd.read_file(geojson_path).to_crs(EVENT_COUNT_CRS_METRIC)
     city_geometry = districts.geometry.union_all()
@@ -709,16 +660,6 @@ def main() -> None:
         district_map, map_extent, self_excitation_percentages, CATEGORY_LABELS,
         colorbar_label="District deviation ratios for the self-excitation estimate (%)",
         output_path=args.output_dir / "self_excitation_map.png",
-    )
-
-    background_percentages = district_deviation_percentages(
-        full_draws, posterior_draws, CATEGORY_LABELS,
-        parameter_of=lambda cid: f"mu.{cid}",
-    )
-    plot_district_deviation_map(
-        district_map, map_extent, background_percentages, CATEGORY_LABELS,
-        colorbar_label="District deviation ratios for the background estimate (%)",
-        output_path=args.output_dir / "background_map.png",
     )
 
 

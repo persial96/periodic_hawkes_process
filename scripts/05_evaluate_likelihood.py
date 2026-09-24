@@ -1,37 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Held-out point-process log-likelihood comparison: constant-baseline
-MHP vs. seasonal-baseline PMHP, across full_city and every district,
-with an equal-draw Monte Carlo robustness check on the LPPD
-difference.
+Held-out point-process log-likelihood comparison: constant-baseline MHP vs. seasonal-baseline PMHP, 
+across full_city and every district, with an equal-draw Monte Carlo robustness check on the LPPD difference.
 
-Ported from the tail of `new_reader.py` (~2436-4758): a second,
-separate evaluation pipeline from the rolling-count forecast in
-`03_forecast_and_evaluate.py` -- this one compares models by their
-likelihood on the actual held-out event sequence, not by predicted
-vs. observed counts per window.
-
-Usage
------
-    python scripts/06_evaluate_likelihood.py \
-        --seasonal-results-root results/mcmc/seasonal \
-        --constant-results-root results/mcmc/constant \
-        --data-root results/train_test \
-        --output-dir results/model_comparison \
-        --units full_city district_A1 district_A15 ...
+Author: Persia Luca (2026), Università della Svizzera italiana, Lugano, Switzerland
+Notes: additional revision used Claude Code (model Sonnet 5 and Opus 4.8) to improve code clarity and maintainability.
 """
 
 from __future__ import annotations
-
-import argparse
+import argparse, numpy as np, pandas as pd
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-
 from categories import CATEGORY_ORDER
 from pmhp.data import calendar_tau, day_of_year_exposure, seasonal_features, seasonal_grid
-from pmhp.forecast import read_posterior_draws
+from pmhp.posterior import read_posterior_draws
 from pmhp.likelihood import (
     equal_draw_mc_delta_lppd,
     evaluate_test_likelihood,
@@ -39,18 +20,16 @@ from pmhp.likelihood import (
     log_mean_exp,
 )
 
-# 0-indexed to match numpy array positions -- see the note in
-# 03_forecast_and_evaluate.py about the two category-id conventions.
+# 0-indexed to match numpy array positions
 CATEGORY_TO_ID = {c: i for i, c in enumerate(CATEGORY_ORDER)}
 D = len(CATEGORY_ORDER)
 
+# constants for the held-out likelihood evaluation
 DATE_COL = "OCCURRED_ON_DATE"
 CATEGORY_COL = "hawkes_category"
-
 TRAIN_START = pd.Timestamp("2020-01-01")
 TEST_START = pd.Timestamp("2025-01-01")
 TEST_END = pd.Timestamp("2026-04-01")
-
 DEFAULT_UNITS = [
     "full_city",
     "district_A1", "district_A15", "district_A7",
@@ -60,15 +39,14 @@ DEFAULT_UNITS = [
     "district_E13", "district_E18", "district_E5",
 ]
 
+# Monte Carlo parameters for equal-draw LPPD difference robustness check
 N_MC_REPETITIONS = 100
 RANDOM_SEED = 12345
 BATCH_SIZE = 100
 
 
 def read_unit_data(data_root: Path, unit: str) -> dict:
-    """Load a unit's cleaned train/test CSVs, restrict to the
-    training/test windows, and compute the seasonal covariates
-    (cos/sin of calendar position) at each test event time.
+    """Load a unit's cleaned train/test CSVs; compute the seasonal covariates (cos/sin of calendar position) at each test event time.
     """
     train_path = data_root / unit / f"{unit}_train_2020_2024.csv"
     test_path = data_root / unit / f"{unit}_test_2025_end.csv"
@@ -76,12 +54,12 @@ def read_unit_data(data_root: Path, unit: str) -> dict:
         raise FileNotFoundError(train_path)
     if not test_path.exists():
         raise FileNotFoundError(test_path)
-
     train = pd.read_csv(train_path, low_memory=False)
     test = pd.read_csv(test_path, low_memory=False)
 
     for df in (train, test):
         df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors="coerce")
+        # drop any rows with invalid timestamps
         if df[DATE_COL].dt.tz is not None:
             df[DATE_COL] = df[DATE_COL].dt.tz_localize(None)
 
@@ -96,7 +74,7 @@ def read_unit_data(data_root: Path, unit: str) -> dict:
 
     train = train.sort_values(DATE_COL).reset_index(drop=True)
     test = test.sort_values(DATE_COL).reset_index(drop=True)
-
+    # map category names to integer ids for Stan
     train["type_id"] = train[CATEGORY_COL].map(CATEGORY_TO_ID).astype(int)
     test["type_id"] = test[CATEGORY_COL].map(CATEGORY_TO_ID).astype(int)
 
@@ -105,12 +83,8 @@ def read_unit_data(data_root: Path, unit: str) -> dict:
     if test[DATE_COL].duplicated().any():
         raise ValueError(f"{unit}: test data contain exact timestamp ties.")
 
-    train_times = (train[DATE_COL] - TRAIN_START).dt.total_seconds().to_numpy(dtype=float) / (
-        24 * 3600
-    )
-    test_times = (test[DATE_COL] - TRAIN_START).dt.total_seconds().to_numpy(dtype=float) / (
-        24 * 3600
-    )
+    train_times = (train[DATE_COL] - TRAIN_START).dt.total_seconds().to_numpy(dtype=float) / (24 * 3600)
+    test_times = (test[DATE_COL] - TRAIN_START).dt.total_seconds().to_numpy(dtype=float) / (24 * 3600)
     train_types = train["type_id"].to_numpy(dtype=int)
     test_types = test["type_id"].to_numpy(dtype=int)
 
@@ -118,14 +92,10 @@ def read_unit_data(data_root: Path, unit: str) -> dict:
     test_cos, test_sin = seasonal_features(tau_test)
 
     return {
-        "train": train,
-        "test": test,
-        "train_times": train_times,
-        "test_times": test_times,
-        "train_types": train_types,
-        "test_types": test_types,
-        "test_cos": test_cos,
-        "test_sin": test_sin,
+        "train": train, "test": test,
+        "train_times": train_times, "test_times": test_times,
+        "train_types": train_types, "test_types": test_types,
+        "test_cos": test_cos, "test_sin": test_sin,
     }
 
 
@@ -141,8 +111,7 @@ def evaluate_unit(
     test_end_days: float,
     output_dir: Path,
 ) -> tuple[dict, list[dict]]:
-    """Fit-vs-test-likelihood comparison for one model unit. Returns
-    (comparison row, list of Monte Carlo repetition rows).
+    """Fit vs test likelihood comparison for one model unit. Returns (comparison row, list of Monte Carlo repetition rows).
     """
     N_train = len(data["train"])
     N_test = len(data["test"])
@@ -168,10 +137,10 @@ def evaluate_unit(
         loglik = components["loglik"]
         lppd = log_mean_exp(loglik)
         unit_results[model_name] = {"draws": len(loglik), "loglik": loglik, "lppd": lppd}
-
-        print(f"Mean test log likelihood: {np.mean(loglik):,.3f}")
+        print(f"mean test log likelihood: {np.mean(loglik):,.3f}")
         print(f"LPPD:                     {lppd:,.3f}")
 
+        # save the likelihood components for this model unit and model type
         component_df = pd.DataFrame(
             {
                 "test_loglik": components["loglik"],
@@ -180,22 +149,20 @@ def evaluate_unit(
                 "excitation_compensator": components["excitation_compensator"],
             }
         )
-        component_df.to_csv(
-            output_dir / f"{unit}_{model_name}_test_likelihood_components.csv", index=False
-        )
+        component_df.to_csv(output_dir / f"{unit}_{model_name}_test_likelihood_components.csv", index=False)
 
+    # compute the LPPD difference and Monte Carlo equal-draw robustness check
     constant_lppd = unit_results["constant"]["lppd"]
     seasonal_lppd = unit_results["seasonal"]["lppd"]
     delta_lppd = seasonal_lppd - constant_lppd
     delta_lppd_per_event = delta_lppd / N_test
-
+    # also compute the mean log-likelihood difference across all draws (not just the LPPD)
     constant_ll = unit_results["constant"]["loglik"]
     seasonal_ll = unit_results["seasonal"]["loglik"]
-    n_equal_draws = min(len(constant_ll), len(seasonal_ll))
 
-    delta_lppd_rep = equal_draw_mc_delta_lppd(
-        constant_ll, seasonal_ll, seed=RANDOM_SEED + unit_number, n_repetitions=N_MC_REPETITIONS
-    )
+    n_equal_draws = min(len(constant_ll), len(seasonal_ll))
+    delta_lppd_rep = equal_draw_mc_delta_lppd(constant_ll, seasonal_ll, seed=RANDOM_SEED + unit_number, n_repetitions=N_MC_REPETITIONS)
+    # compute summary statistics for the Monte Carlo repetitions
     mc_mean = float(np.mean(delta_lppd_rep))
     mc_sd = float(np.std(delta_lppd_rep, ddof=1))
     mc_q05 = float(np.quantile(delta_lppd_rep, 0.05))
@@ -235,9 +202,7 @@ def evaluate_unit(
 
 def build_comparison_table(comparison_rows: list[dict]) -> pd.DataFrame:
     comparison = pd.DataFrame(comparison_rows)
-    comparison["display_unit"] = (
-        comparison["unit"].replace({"full_city": "Full city"}).str.replace("district_", "", regex=False)
-    )
+    comparison["display_unit"] = (comparison["unit"].replace({"full_city": "Full city"}).str.replace("district_", "", regex=False))
     comparison["_sort_full_city"] = (comparison["unit"] != "full_city").astype(int)
     comparison = (
         comparison.sort_values(["_sort_full_city", "display_unit"])

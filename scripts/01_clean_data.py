@@ -1,38 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Combine raw per-file BPD crime CSVs into one dataset, map offense
-descriptions onto the four Hawkes categories, remove administrative
-and event-location duplicates, and split into full-city + per-district
-train/test CSVs (one folder per model unit, matching the layout
-`pmhp.fit` / `scripts/02_fit_models.py` expect).
+Combine raw BPD crime CSVs into one dataset, map offense descriptions onto the four Hawkes categories,
+remove administrative and event-location duplicates, and split into full-city + per-district train/test CSV.
 
-Ported from `cleaning.py`, whose ~1000 lines were the same pipeline
-pasted twice in a row (a leftover from notebook cell re-running); this
-keeps only the second, complete copy.
+Details on exact data cleaning logic are explained in the paper.
 
-Usage
------
-    python scripts/01_clean_data.py \
-        --raw-data-dir /path/to/BC_Crime_Boston_Paper/data \
-        --output-dir results/train_test
+Author: Persia Luca (2026), Università della Svizzera italiana, Lugano, Switzerland
+Notes: additional revision used Claude Code (model Sonnet 5 and Opus 4.8) to improve code clarity and maintainability.
 """
 
 from __future__ import annotations
-
-import argparse
-import glob
+import argparse, glob, numpy as np, pandas as pd
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-
 from categories import CATEGORY_ORDER, CATEGORY_TO_ID
 
 DATE_COL = "OCCURRED_ON_DATE"
 
-# Raw OFFENSE_DESCRIPTION -> Hawkes category. Anything not listed here
-# is dropped (see map_hawkes_categories).
+# raw OFFENSE_DESCRIPTION -> Hawkes category. Anything not listed here is dropped (see map_hawkes_categories)
 CRIME_MAPPING = {
+    # note there are some typos in the raw data (e.g. "COMMERICAL" instead of "COMMERCIAL", "NEGLIGIENT" instead of "NEGLIGENT")
     "BURGLARY - COMMERICAL": "Burglary",
     "BURGLARY - COMMERICAL - ATTEMPT": "Burglary",
     "BURGLARY - COMMERICAL - FORCE": "Burglary",
@@ -60,22 +46,22 @@ CRIME_MAPPING = {
     "ARSON": "Vandalism_Disorder",
 }
 
-# Administrative duplicate definitions, applied city-wide before the
-# per-unit split (exact timestamp ties are handled separately, per
-# unit -- see remove_timestamp_ties).
+# Administrative duplicate definitions, applied city-wide before the per unit split 
+# (exact timestamp ties are handled separately, per unit -- see remove_timestamp_ties).
 OFFENSE_TIME_DUPLICATE_COLS = [
-    "OFFENSE_CODE", "OFFENSE_DESCRIPTION", "OCCURRED_ON_DATE",
-    "YEAR", "MONTH", "DAY_OF_WEEK", "HOUR",
+    "OFFENSE_CODE", "OFFENSE_DESCRIPTION", "OCCURRED_ON_DATE", "YEAR", "MONTH", "DAY_OF_WEEK", "HOUR",
 ]
 EVENT_LOCATION_DUPLICATE_COLS = [
-    "OCCURRED_ON_DATE", "hawkes_category", "DISTRICT",
-    "REPORTING_AREA", "STREET", "Lat", "Long",
+    "OCCURRED_ON_DATE", "hawkes_category", "DISTRICT", "REPORTING_AREA", "STREET", "Lat", "Long",
 ]
 
-
-def combine_raw_files(raw_data_dir: Path, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+def combine_raw_files(
+        raw_data_dir: Path, 
+        start: pd.Timestamp, 
+        end: pd.Timestamp
+    ) -> pd.DataFrame:
     """Concatenate every raw *.csv under raw_data_dir and normalize
-    OCCURRED_ON_DATE (source files don't always use the same
+    OCCURRED_ON_DATE (note that the source file don't always use the same
     timestamp format), restricted to [start, end).
     """
     csv_files = [
@@ -85,12 +71,12 @@ def combine_raw_files(raw_data_dir: Path, start: pd.Timestamp, end: pd.Timestamp
     ]
     if not csv_files:
         raise FileNotFoundError(f"No raw CSV files found under {raw_data_dir}")
-
     df = pd.concat(
         [pd.read_csv(f, low_memory=False, na_values=["", " "]) for f in csv_files],
         ignore_index=True,
     )
 
+    # normalizing OCCURRED_ON_DATE to UTC, then convert to naive (no timezone) for Stan
     clean_strings = df[DATE_COL].astype(str).str[:19]
     df[DATE_COL] = pd.to_datetime(clean_strings, errors="coerce", utc=True).dt.tz_convert(None)
     df = df[(df[DATE_COL] >= start) & (df[DATE_COL] < end)].copy()
@@ -98,8 +84,7 @@ def combine_raw_files(raw_data_dir: Path, start: pd.Timestamp, end: pd.Timestamp
 
 
 def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop unused columns, derive calendar fields, drop rows missing
-    the fields every later step depends on.
+    """Drop unused columns, derive calendar fields..
     """
     df = df.drop(columns=[c for c in ("OFFENSE_CODE_GROUP", "UCR_PART") if c in df.columns])
     df["YEAR"] = df[DATE_COL].dt.year
@@ -107,9 +92,9 @@ def basic_clean(df: pd.DataFrame) -> pd.DataFrame:
     df["HOUR"] = df[DATE_COL].dt.hour
     df["DAY_OF_WEEK"] = df[DATE_COL].dt.day_name()
     df["YearMonth"] = df[DATE_COL].dt.to_period("M").astype(str)
+    # drop rows missing the fields every later step depends on (date, offense description, district)
     df = df.dropna(subset=[DATE_COL, "OFFENSE_DESCRIPTION", "DISTRICT"]).copy()
     return df
-
 
 def map_hawkes_categories(df: pd.DataFrame) -> pd.DataFrame:
     """Add `hawkes_category`; drop offense descriptions not in CRIME_MAPPING."""
@@ -117,22 +102,16 @@ def map_hawkes_categories(df: pd.DataFrame) -> pd.DataFrame:
     df["hawkes_category"] = df["OFFENSE_DESCRIPTION"].map(CRIME_MAPPING)
     return df.dropna(subset=["hawkes_category"]).copy()
 
-
 def drop_administrative_duplicates(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove repeated incident numbers, repeated offense-time
-    records, and exact event-location duplicates -- global
-    administrative dedup applied city-wide, before the per-unit split.
-    Exact timestamp ties (needed for the point-process model) are
-    handled separately per model unit; see remove_timestamp_ties.
+    """Remove repeated incident numbers, repeated offense time records, and exact event location duplicates.
+    Exact timestamp ties (needed for the point-process model) are handled separately per model unit; see remove_timestamp_ties.
     """
     before = len(df)
     df = df.drop_duplicates(subset="INCIDENT_NUMBER", keep="first").copy()
     print(f"Dropped repeated INCIDENT_NUMBER rows: {before - len(df)}")
-
     before = len(df)
     df = df.drop_duplicates(subset=OFFENSE_TIME_DUPLICATE_COLS, keep="first").copy()
     print(f"Dropped offense-time duplicate rows: {before - len(df)}")
-
     before = len(df)
     df = df.drop_duplicates(subset=EVENT_LOCATION_DUPLICATE_COLS, keep="first").copy()
     print(f"Dropped exact event-location duplicate rows: {before - len(df)}")
@@ -141,25 +120,21 @@ def drop_administrative_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_model_units(df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
-    """(unit_name, subset) for full_city plus every valid BPD district
-    (a letter followed by digits, e.g. A1, B2, C11 -- this excludes
-    entries like nan, 'External', 'Outside of').
+    """(unit_name, subset) for full_city plus every valid BPD district -- this excludes entries like nan, 'External', 'Outside of').
+    Note: valid districts are defined as a single uppercase letter followed by one or more digits (e.g. A1, B2, C3, D4, E5, F6, G7, H8).
     """
     df = df.copy()
     df["DISTRICT"] = df["DISTRICT"].astype(str).str.upper()
     district_mask = df["DISTRICT"].str.fullmatch(r"[A-Z]\d+")
     valid_districts = sorted(df.loc[district_mask, "DISTRICT"].dropna().unique())
     print("Valid districts used:", valid_districts)
-
     units = [("full_city", df)]
     units += [(f"district_{d}", df[df["DISTRICT"] == d].copy()) for d in valid_districts]
     return units
 
 
 def remove_timestamp_ties(df_model: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Drop every event sharing an exact timestamp with another event
-    in this model unit (regardless of category) -- the point-process
-    model is continuous-time and can't order simultaneous events.
+    """Drop every event sharing an exact timestamp with another event in this model unit (regardless of category).
     Returns (deduplicated df, the removed rows, for inspection).
     """
     same_time_rows = (
@@ -180,40 +155,37 @@ def build_unit_train_test(
     test_start: pd.Timestamp,
     test_end: pd.Timestamp,
 ) -> dict:
-    """Apply the train/test window, remove timestamp ties, map
-    category ids, compute continuous event time, split, and save the
-    four CSVs (_all/_train/_test/_removed_timestamp_ties) for one
-    model unit. Returns a summary dict for the run-level summary table.
+    """Apply the train/test window, remove timestamp ties, map category ids, compute continuous event time, split, and save the
+    four CSVs (_all/_train/_test/_removed_timestamp_ties) for one model unit. Returns a summary dict.
     """
     print(f"\n{'=' * 80}\nModel unit: {unit_name}\n{'=' * 80}")
     unit_dir.mkdir(parents=True, exist_ok=True)
-
-    df_model = df_unit[
-        (df_unit[DATE_COL] >= train_start) & (df_unit[DATE_COL] < test_end)
-    ].copy()
+    # applying the train/test window and sort by timestamp
+    df_model = df_unit[(df_unit[DATE_COL] >= train_start) & (df_unit[DATE_COL] < test_end)].copy()
     df_model = df_model.sort_values(DATE_COL).reset_index(drop=True)
     print(f"After applying train/test analysis window: {df_model.shape}")
-
+    # removing exact timestamp ties (regardless of category) and reporting summary stats
     before = len(df_model)
     df_model, same_time_rows = remove_timestamp_ties(df_model)
     n_tied_events = len(same_time_rows)
     n_tied_groups = same_time_rows[DATE_COL].nunique()
     print(f"Timestamp tie groups: {n_tied_groups}, events removed: {n_tied_events}")
     print(f"After dropping all exact timestamp ties: {df_model.shape}")
-
+    # compute summary stats for the unit
     same_time_same_category = df_model.duplicated(subset=[DATE_COL, "hawkes_category"], keep=False).sum()
     time_gaps = df_model.sort_values(DATE_COL)[DATE_COL].diff().dt.total_seconds()
     non_positive_time_gaps = int((time_gaps <= 0).sum())
-
+    # map category names to integer ids for Stan
     df_model = df_model[df_model["hawkes_category"].isin(CATEGORY_ORDER)].copy()
     df_model["hawkes_id"] = df_model["hawkes_category"].map(CATEGORY_TO_ID).astype(int)
-
+    # compute continuous event time in days since train_start (for Stan)
     df_model["event_time_days"] = (df_model[DATE_COL] - train_start).dt.total_seconds() / (24 * 3600)
     df_model["sample_split"] = np.where(df_model[DATE_COL] < test_start, "train", "test")
-
+    # split into train/test subsets
     df_train = df_model[df_model["sample_split"] == "train"].copy()
     df_test = df_model[df_model["sample_split"] == "test"].copy()
-
+    # save the four CSVs for this model unit
+    # doesn't handle cases where the years of analyis change (assume the train/test split is always 2020-2024 vs 2025-end to reproduce paper results)
     all_path = unit_dir / f"{unit_name}_all_2020_end.csv"
     train_path = unit_dir / f"{unit_name}_train_2020_2024.csv"
     test_path = unit_dir / f"{unit_name}_test_2025_end.csv"
@@ -226,7 +198,7 @@ def build_unit_train_test(
 
     print(
         f"N_events all/train/test: {len(df_model)}/{len(df_train)}/{len(df_test)}"
-        if len(df_model) else "No events remain after filtering."
+        if len(df_model) else "no events remain after filtering."
     )
 
     return {
@@ -271,7 +243,7 @@ def main() -> None:
     test_end = pd.Timestamp(args.test_end)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-
+    # load and combine raw CSVs, filter to the analysis window, and save the combined dataset if requested
     df = combine_raw_files(args.raw_data_dir, train_start, test_end)
     if args.combined_csv_path:
         args.combined_csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -290,9 +262,7 @@ def main() -> None:
 
     summary_rows = []
     for unit_name, df_unit in model_units:
-        summary = build_unit_train_test(
-            unit_name, df_unit, args.output_dir / unit_name, train_start, test_start, test_end
-        )
+        summary = build_unit_train_test(unit_name, df_unit, args.output_dir / unit_name, train_start, test_start, test_end)
         category_counts = summary.pop("category_counts")
         print(category_counts)
         summary_rows.append(summary)

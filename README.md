@@ -5,10 +5,9 @@ Fourier baseline, fit with Stan/CmdStanPy, plus the full paper
 reproduction pipeline (Boston PD crime data).
 
 The `pmhp` package (`src/pmhp/`) is the reusable, dataset-agnostic
-core: data prep, model fitting, rolling-count forecasting, and
-held-out likelihood evaluation. Everything Boston-PD-specific --
-column names, category taxonomy, file paths, figures, LaTeX tables --
-lives in `scripts/`.
+core: data prep, model fitting, and held-out likelihood evaluation.
+Everything Boston-PD-specific -- column names, category taxonomy,
+file paths, figures, LaTeX tables -- lives in `scripts/`.
 
 ## Install
 
@@ -27,8 +26,8 @@ Requires a working CmdStan installation for `pmhp.fit` (see
 src/pmhp/
 ├── data.py         # seasonal Fourier features, leap-year calendar mapping, category mapping
 ├── fit.py          # PMHPModel: prepares Stan data and runs CmdStanPy sampling
-├── forecast.py      # posterior-mean parameters, rolling-forecast intensity integration
-├── likelihood.py    # held-out point-process log-likelihood, full-posterior evaluation
+├── posterior.py    # shared helpers for locating/reading a unit's posterior draws
+├── likelihood.py   # held-out point-process log-likelihood, full-posterior evaluation
 └── models/
     └── hawkes_temporal_seasonal_beta_gamma.stan
 ```
@@ -53,30 +52,24 @@ python scripts/02_fit_models.py \
 # ... repeat with --baseline constant, and for each district, to fill out
 #     results/mcmc/{seasonal,constant}/<unit>/
 
-# 3. Rolling-forecast evaluation (predicted vs. observed counts per window).
-python scripts/03_forecast_and_evaluate.py \
-    --seasonal-results-root results/mcmc/seasonal \
-    --constant-results-root results/mcmc/constant \
-    --data-root results/train_test \
-    --output-csv results/forecasts/full_city_rolling_forecast.csv
-
-# 4. Figures: branching-ratio heatmap, seasonal-multiplier plot,
+# 3. Figures: branching-ratio heatmap, seasonal-multiplier plot,
 #    self-excitation/background/event-count maps.
-python scripts/04_make_figures.py \
+python scripts/03_make_figures.py \
     --data-root results/train_test \
     --results-root results/mcmc/constant \
     --output-dir results/figures \
     --geojson-path /path/to/Boston_Police_Districts.geojson   # optional, skips maps if omitted
 
-# 5. Appendix LaTeX tables (background intensities, branching ratios,
+# 4. Appendix LaTeX tables (background intensities, branching ratios,
 #    decay rates, half-lives, seasonal coefficients).
-python scripts/05_make_tables.py \
+python scripts/04_make_tables.py \
     --results-root results/mcmc/seasonal \
     --output-dir results/tables/appendix_district
 
-# 6. Held-out likelihood model comparison (constant vs. seasonal baseline),
+# 5. Held-out likelihood model comparison (constant vs. seasonal baseline),
 #    full city + every district, with a Monte Carlo robustness check.
-python scripts/06_evaluate_likelihood.py \
+#    This is the LPPD evaluation reported in the paper (Table 6).
+python scripts/05_evaluate_likelihood.py \
     --seasonal-results-root results/mcmc/seasonal \
     --constant-results-root results/mcmc/constant \
     --data-root results/train_test \
@@ -84,7 +77,7 @@ python scripts/06_evaluate_likelihood.py \
 ```
 
 `scripts/categories.py` holds the shared crime-category taxonomy
-(`CATEGORY_ORDER`) used across 01/02/03/06.
+(`CATEGORY_ORDER`) used across 01/02/05.
 
 ## Data
 
@@ -98,7 +91,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Covers the pure numpy/pandas logic in `pmhp.data`, `pmhp.forecast`,
+Covers the pure numpy/pandas logic in `pmhp.data`, `pmhp.posterior`,
 and `pmhp.likelihood` with small synthetic inputs (no CmdStan needed).
 
 ## License

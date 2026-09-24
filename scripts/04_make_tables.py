@@ -1,50 +1,37 @@
 # -*- coding: utf-8 -*-
 """
-Paper appendix LaTeX tables: district posterior estimates of the
-background intensities, branching ratios, decay rates, excitation
-half-lives, and (if the seasonal model was fit) the annual seasonal
-coefficients, plus a master .tex file that \\input{}s all of them.
+Script to produce paper LaTeX tables.
 
-Ported from `new_reader.py` lines ~1400-2196. The four "one table per
-triggered category" loops (branching / beta / half-life) were kept as
-one parameterized loop (`parameter_tables`) rather than three
-hand-copied blocks, as they already were in the original.
-
-Usage
------
-    python scripts/05_make_tables.py \
-        --results-root results/mcmc/seasonal \
-        --output-dir results/tables/appendix_district
+Author: Persia Luca (2026), Università della Svizzera italiana, Lugano, Switzerland
+Notes: additional revision used Codex (model GPT-5.6 Sol) to improve code clarity and maintainability.
 """
 
 from __future__ import annotations
-
-import argparse
-import re
+import argparse, re, numpy as np, pandas as pd
 from pathlib import Path
+from pmhp.posterior import branching_prefix
 
-import numpy as np
-import pandas as pd
-
-from pmhp.forecast import branching_prefix
-
+# define quantiles for credible intervals
 LOWER_Q = 0.025
 UPPER_Q = 0.975
 
+# define category labels and headers for LaTeX tables
 CATEGORY_LABELS = {
     1: "Vehicle theft",
     2: "Vandalism and disorder",
     3: "Burglary",
     4: "Violent crime",
 }
+
+# define category headers for LaTeX tables
 CATEGORY_HEADERS = {
     1: r"\makecell{Vehicle\\theft}",
     2: r"\makecell{Vandalism\\and disorder}",
     3: r"Burglary",
     4: r"\makecell{Violent\\crime}",
 }
-DISTRICT_ORDER = ["A1", "A15", "A7", "B2", "B3", "C11", "C6", "D14", "D4", "E13", "E18", "E5"]
 
+DISTRICT_ORDER = ["A1", "A15", "A7", "B2", "B3", "C11", "C6", "D14", "D4", "E13", "E18", "E5"]
 PARAMETER_TABLES = {
     "branching": {"caption": "branching ratios", "symbol": r"\alpha", "digits": 3},
     "beta": {"caption": "decay rates", "symbol": r"\beta", "digits": 3},
@@ -61,13 +48,11 @@ def posterior_summary(values: pd.Series, digits: int = 3) -> tuple[str, str]:
     upper = values.quantile(UPPER_Q)
     return f"{estimate:.{digits}f}", f"[{lower:.{digits}f}, {upper:.{digits}f}]"
 
-
 def posterior_cell(values: pd.Series, digits: int = 3) -> str:
     estimate, interval = posterior_summary(values, digits=digits)
     if estimate == "--":
         return "--"
     return rf"\makecell{{{estimate}\\{{\scriptsize {interval}}}}}"
-
 
 def category_slug(category_name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", category_name.lower()).strip("_")
@@ -89,7 +74,6 @@ def order_units(posterior_draws: dict[str, pd.DataFrame], include_full_city: boo
         if district_code in unit_lookup:
             unit_rows.append((district_code, unit_lookup[district_code]))
     return unit_rows
-
 
 def write_background_tables(
     posterior_draws: dict[str, pd.DataFrame], unit_rows: list[tuple[str, str]], output_dir: Path
@@ -154,10 +138,7 @@ def write_parameter_tables(
     branch_prefix: str,
     output_dir: Path,
 ) -> list[Path]:
-    """One table per (parameter_type, triggered category): branching
-    ratio, decay rate (beta), and excitation half-life. These three
-    were three hand-copied ~200-line loops in the original; here they
-    share one loop keyed by PARAMETER_TABLES.
+    """One table per (parameter_type, triggered category): branching ratio, decay rate (beta), and excitation half-life.
     """
     generated = []
 
@@ -265,8 +246,7 @@ def write_parameter_tables(
 def write_seasonal_coefficient_table(
     posterior_draws: dict[str, pd.DataFrame], unit_rows: list[tuple[str, str]], output_dir: Path
 ) -> Path:
-    """One table: annual seasonal Fourier coefficients (gamma_c, gamma_s),
-    shared across categories within each geographical model.
+    """One table: annual seasonal Fourier coefficients (gamma_c, gamma_s), shared across categories within each geographical model.
     """
     output_file = output_dir / "seasonal_coefficients.tex"
 
@@ -353,9 +333,7 @@ def write_master_file(output_dir: Path, write_seasonal: bool) -> Path:
 
 
 def full_city_decay_summary(full_draws: pd.DataFrame) -> pd.DataFrame:
-    """Full-city decay-rate / half-life summary across all category
-    pairs, as a small DataFrame -- handy as a quick sanity check
-    alongside the per-category appendix tables above.
+    """Full-city decay-rate / half-life summary across all category pairs, as a small DataFrame.
     """
     rows = []
     for parent_id, parent_name in CATEGORY_LABELS.items():

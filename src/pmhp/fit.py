@@ -2,12 +2,8 @@
 """
 Fitting the periodic multivariate Hawkes model with CmdStanPy.
 
-This is the general-purpose core extracted from the old
-`last_hpc_use_this.py` driver script: the data prep (seasonal Fourier
-features, leap-year handling, priors) and the CmdStanPy `sample()` call
-are here; SLURM array IDs, scratch-dir shuffling, and env-var reads are
-NOT -- those are HPC-run-specific and live in `scripts/02_fit_models.py`
-and `hpc/run_array.sh` instead.
+Author: Persia Luca (2026), Università della Svizzera italiana, Lugano, Switzerland
+Notes: additional revision used Claude (model Sonnet 5) to improve code clarity and maintainability.
 """
 
 from __future__ import annotations
@@ -17,8 +13,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-import pandas as pd
+import numpy as np, pandas as pd
 from cmdstanpy import CmdStanModel, CmdStanMCMC
 
 from . import data as pmhp_data
@@ -28,7 +23,23 @@ DEFAULT_STAN_FILE = "hawkes_temporal_seasonal_beta_gamma.stan"
 
 @dataclass
 class Priors:
-    """Beta-Gamma prior specification (Stan uses Gamma(shape, rate))."""
+    """Beta-Gamma prior specification (Stan uses Gamma(shape, rate)).
+
+    Defaults match the paper's Section 3.5 choices:
+      - alpha_ij ~ Beta(1, 8): mean 1/9, most prior mass on weak
+        excitation, but with support over the full (0, 1) interval so
+        strong branching can still be learned when the data support it.
+      - mu_i ~ Gamma(2, 0.5): mean 4, sd sqrt(2)/0.5 -- dispersed
+        enough to let categories with very different event rates each
+        find their own background level.
+      - beta_ij ~ Gamma(2, 0.5): favors short-lived excitation
+        (consistent with near-repeat mechanisms), without ruling out
+        slower decay when the data support it.
+      - gamma_cos, gamma_sin ~ N(0, season_sd^2): centered on a flat
+        annual profile (s(t) = 1 when both are 0); the posterior only
+        departs from "no seasonality" when the event sequence supports
+        it.
+    """
 
     mu_prior_shape: float = 2.0
     mu_prior_rate: float = 0.50
@@ -75,6 +86,8 @@ def prepare_stan_data(
     use_seasonality = 1 if baseline == "seasonal" else 0
     priors = priors or Priors()
 
+    # Normalize timestamps: parse, drop timezone info (the model works
+    # in naive local time -- see calendar_tau, which assumes this).
     dates = pd.to_datetime(df[date_col], errors="coerce")
     if dates.dt.tz is not None:
         dates = dates.dt.tz_localize(None)
@@ -82,6 +95,7 @@ def prepare_stan_data(
     work = df.copy()
     work[date_col] = dates
     work = work.dropna(subset=[date_col, category_col]).copy()
+    # Restrict to the training window [observation_start, observation_end).
     work = work[
         (work[date_col] >= observation_start) & (work[date_col] < observation_end)
     ].copy()
@@ -90,6 +104,10 @@ def prepare_stan_data(
     if work.empty:
         raise ValueError("No events remain after applying the observation window.")
 
+    # The point-process likelihood requires a strictly increasing,
+    # tie-free event sequence (Section 4.1 of the paper) -- this should
+    # already be true after upstream cleaning, but check rather than
+    # silently feed Stan a malformed sequence.
     pmhp_data.check_no_ties(work[date_col])
 
     category_to_id, id_to_category = pmhp_data.build_category_mapping(category_order)
@@ -98,9 +116,11 @@ def prepare_stan_data(
     types = work["hawkes_id"].to_numpy(dtype=int)
     D_dims = len(category_order)
 
+    # Continuous event times, in fractional days since observation_start
+    # (this is t_n in the paper's notation, Section 3.1).
     times = pmhp_data.continuous_time(work[date_col], observation_start)
     N_events = len(work)
-    marks = np.ones(N_events, dtype=float)
+    marks = np.ones(N_events, dtype=float)  # unmarked process: every event has weight 1
     T_observation = float(
         (observation_end - observation_start).total_seconds() / (24 * 3600)
     )
@@ -110,12 +130,21 @@ def prepare_stan_data(
     if times[-1] >= T_observation:
         raise ValueError("Last event time is outside the observation window.")
 
+    # Seasonal covariates at each event time (for the log-intensity term
+    # of the likelihood) and on the fixed 365-day grid (for normalizing
+    # s(t) to have annual mean 1 -- see pmhp.data.seasonal_grid and
+    # Appendix B of the paper). Both are needed regardless of baseline
+    # so the same Stan program handles both "seasonal" and "constant"
+    # (use_seasonality just zeroes out their contribution when False).
     tau_event = pmhp_data.calendar_tau(work[date_col])
     season_cos_event, season_sin_event = pmhp_data.seasonal_features(tau_event)
 
     G = pmhp_data.SEASONAL_DAYS
     _, season_cos_grid, season_sin_grid = pmhp_data.seasonal_grid(G)
 
+    # How much of the observation window falls on each of the G
+    # seasonal-grid days -- needed to compute the exposure-weighted
+    # background compensator S_T^(G) in the likelihood (Appendix B).
     day_exposure = pmhp_data.day_of_year_exposure(
         observation_start, observation_end, T_observation
     )

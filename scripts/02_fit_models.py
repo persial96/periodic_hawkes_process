@@ -2,33 +2,18 @@
 """
 Fit the periodic MHP model to one cleaned train dataset.
 
-Usage
------
-    python scripts/02_fit_models.py \
-        --train-csv results/train_test/full_city/full_city_train_2020_2024.csv \
-        --unit full_city \
-        --baseline seasonal \
-        --output-dir results/mcmc/seasonal/full_city
-
-Replaces the old MODEL_UNIT / BASELINE_SPEC env-vars and SLURM array
-plumbing with plain CLI args. Writes CmdStan output directly to
---output-dir (no scratch-dir shuffling) plus a category-mapping and
-run-metadata CSV alongside it.
+Author: Persia Luca (2026), Università della Svizzera italiana, Lugano, Switzerland
+Notes: additional revision used Claude Code (model Sonnet 5 and Opus 4.8) to improve code clarity and maintainability.
 """
 
 from __future__ import annotations
-
-import argparse
+import argparse, pandas as pd
 from pathlib import Path
-
-import pandas as pd
-
 from categories import CATEGORY_ORDER
 from pmhp.fit import PMHPModel, Priors, prepare_stan_data
 
 DATE_COL = "OCCURRED_ON_DATE"
 CATEGORY_COL = "hawkes_category"
-
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
@@ -55,10 +40,12 @@ def main() -> None:
     train_start = pd.Timestamp(args.train_start)
     train_end = pd.Timestamp(args.train_end)
 
+    # loading single train CSV (already cleaned and filtered to the desired unit)
     print(f"Loading {args.train_csv} ...")
     df = pd.read_csv(args.train_csv, low_memory=False, na_values=["", " "])
     print(f"Initial shape: {df.shape}")
 
+    # prepare data for Stan
     prepared = prepare_stan_data(
         df,
         date_col=DATE_COL,
@@ -74,6 +61,7 @@ def main() -> None:
         f"({args.baseline} baseline)."
     )
 
+    # fit the model
     model = PMHPModel(stan_file=args.stan_file)
     model.sample(
         prepared,
@@ -88,6 +76,7 @@ def main() -> None:
     )
     print(f"Done. CmdStan output written to {args.output_dir}")
 
+    # saving category mapping and run metadata
     category_mapping_df = pd.DataFrame(
         {
             "hawkes_category": list(prepared.category_to_id.keys()),
@@ -100,6 +89,7 @@ def main() -> None:
     category_mapping_df.to_csv(category_mapping_path, index=False)
     print(f"Saved category mapping to: {category_mapping_path}")
 
+    # saving run metadata for summary statistics and reproducibility
     metadata_df = pd.DataFrame(
         [
             {
