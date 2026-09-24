@@ -13,27 +13,27 @@ Crime events cluster in time — a burglary can make a follow-up burglary or veh
 This project extends the multivariate Hawkes process with a **periodic background component**: each of four crime categories in our dataset (vehicle theft, vandalism, burglary, violent crime) gets its own average background rate, multiplied by a shared, normalized annual seasonal curve. The excitation structure (who triggers whom, and for how long) is then estimated net of that seasonal pattern, both city-wide and separately for each of Boston's 12 police districts. The model is fit with Bayesian inference in Stan, and compared against a constant-baseline benchmark using held-out predictive likelihood.
 
 ## Repository structure
-
+```bash
 periodic-mhp/
-├── src/pmhp/ # the installable, dataset-agnostic package
-│ ├── data.py # seasonal Fourier features, leap-year-aware calendar mapping
-│ ├── fit.py # builds Stan-ready data, runs CmdStanPy sampling
-│ ├── posterior.py # helpers for locating/reading a fitted unit's posterior draws
-│ ├── likelihood.py # held-out point-process log-likelihood (LPPD) evaluation
-│ └── models/
-│ └── hawkes_temporal_seasonal_beta_gamma.stan # the Stan model itself
-├── scripts/ # the Boston-PD-specific reproduction pipeline
-│ ├── 01_clean_data.py # raw data → cleaned, deduplicated, train/test-split events
-│ ├── 02_fit_models.py # fits one (unit, baseline) pair with CmdStanPy
-│ ├── 03_make_figures.py # branching-matrix heatmap, seasonal plot, district maps
-│ ├── 04_make_tables.py # LaTeX appendix tables (background, branching, decay, half-life)
-│ ├── 05_evaluate_likelihood.py # held-out LPPD comparison, constant vs. seasonal baseline
-│ └── categories.py # shared crime-category taxonomy
-├── tests/ # unit tests, including closed-form checks of the likelihood math
-├── data/README.md # where to get the raw data (not included in this repo)
+├── src/pmhp/                  # the installable, dataset-agnostic package
+│   ├── data.py                 # seasonal Fourier features, leap-year-aware calendar mapping
+│   ├── fit.py                  # builds Stan-ready data, runs CmdStanPy sampling
+│   ├── posterior.py            # helpers for locating/reading a fitted unit's posterior draws
+│   ├── likelihood.py           # held-out point-process log-likelihood (LPPD) evaluation
+│   └── models/
+│       └── hawkes_temporal_seasonal_beta_gamma.stan   # the Stan model itself
+├── scripts/                    # the Boston-PD-specific reproduction pipeline
+│   ├── 01_clean_data.py         # raw data -> cleaned, deduplicated, train/test-split events
+│   ├── 02_fit_models.py         # fits one (unit, baseline) pair with CmdStanPy
+│   ├── 03_make_figures.py       # branching-matrix heatmap, seasonal plot, district maps
+│   ├── 04_make_tables.py        # LaTeX appendix tables (background, branching, decay, half-life)
+│   ├── 05_evaluate_likelihood.py # held-out LPPD comparison, constant vs. seasonal baseline
+│   └── categories.py            # shared crime-category taxonomy
+├── tests/                      # unit tests, including closed-form checks of the likelihood math
+├── data/README.md              # where to get the raw data (not included in this repo)
 ├── pyproject.toml
 └── README.md
-
+```
 
 ## Installation
 
