@@ -1,6 +1,6 @@
 # Periodic Multivariate Hawkes Process for Urban Crime
 
-Companion code for **"Periodic Multivariate Hawkes Process for Urban Crime"** by Luca Persia (Zurich University of Applied Sciences; Università della Svizzera italiana) and Youness Diouane (MIT).
+Companion code for **"Periodic Multivariate Hawkes Process for Urban Crime"** by Luca Persia (Università della Svizzera italiana) and Youness Diouane (MIT).
 
 This repository contains the `pmhp` Python package — a periodic multivariate Hawkes process (PMHP) with a seasonal Fourier background, estimated with Stan/CmdStanPy — together with the full pipeline used to reproduce the paper's results on Boston Police Department crime incident data (2020–2026).
 
@@ -139,6 +139,6 @@ TODO
 
 ## Contact
 
-Luca Persia — pess@zhaw.ch / luca.persia@usi.ch
+Luca Persia — luca.persia@usi.ch
 Youness Diouane — diouane@mit.edu
 
