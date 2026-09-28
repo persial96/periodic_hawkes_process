@@ -6,7 +6,7 @@ This repository contains the `pmhp` Python package — a periodic multivariate H
 
 > **Paper:** *Periodic Multivariate Hawkes Process for Urban Crime* (Persia & Diouane).
 
-## What the model does
+## Model
 
 Crime events cluster in time — a burglary can make a follow-up burglary or vehicle theft more likely in the days after, a mechanism criminologists call *near-repeat victimization*. At the same time, crime has a genuine seasonality: more incidents in summer than winter, independent of any one event triggering another. A standard multivariate Hawkes process, with a constant background rate, can't tell these two things apart; it risks attributing predictable seasonal upswings to event-to-event triggering.
 
