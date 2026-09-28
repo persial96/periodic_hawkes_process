@@ -139,6 +139,4 @@ TODO
 
 ## Contact
 
-Luca Persia — luca.persia@usi.ch
-Youness Diouane — diouane@mit.edu
 
