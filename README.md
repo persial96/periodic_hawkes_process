@@ -126,11 +126,11 @@ The test validates the core package logic against closed-form and independently-
 If you use this code, please cite the paper:
 
 ```bibtex
-@article{persia_diouane_pmhp,
-  title   = {Periodic Multivariate Hawkes Process for Urban Crime},
-  author  = {Persia, Luca and Diouane, Youness},
-  journal = {TBD},
-  year    = {2026}
+@article{,
+  title   = {},
+  author  = {},
+  journal = {},
+  year    = {}
 }
 ```
 
